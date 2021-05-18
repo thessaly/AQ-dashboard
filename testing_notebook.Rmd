@@ -1,0 +1,261 @@
+---
+title: "LogAir: Open pollution mapper"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    social: menu
+    source_code: https://github.com/walkerke/neighborhood_diversity
+
+---
+
+```{r setup, include=FALSE}
+
+library(shiny)
+library(leaflet) # devtools::install_github('rstudio/leaflet')
+library(highcharter) # devtools::install_github('jbkunst/highcharter')
+library(plotly) # devtools::install_github('ropensci/plotly')
+library(ggplot2) # devtools::install_github('hadley/ggplot2')
+library(sp)
+library(dplyr)
+library(flexdashboard) # devtools::install_github('rstudio/flexdashboard')
+library(rgeos)
+library(mapproj)
+library(maptools)
+library(readr)
+library(ggthemes)
+library(DT)
+library(anytime)
+
+# Build dataframe
+library("jsonlite")
+url <- "https://api.logair.unige.ch/v1/service/device?device_id=LAJA-001"
+df <- jsonlite::fromJSON(url)
+df <- df %>%
+  mutate(datetime = anytime(timestamp_nix/1000)) %>%
+  mutate(date = anydate(timestamp_nix/1000)) %>% 
+  mutate(time = format(datetime, format = "%H:%M:%S"))
+
+# Build base plot
+base_graph <- ggplot(df, 
+                     aes(transaction_id)) 
+
+# Build base map
+
+pal <- colorFactor(
+  palette = c('green', 'yellow', 'orange', 'red', 'purple'),
+  domain = df$pm_10
+)
+
+map <-  leaflet(df) %>% 
+    addProviderTiles(providers$CartoDB.Positron) %>% 
+    addCircles(
+      popup = ~paste0(
+        "<b>Device ID:</b> ", device_id,
+        "<br><b>Date</b>: ", date,
+        "<br><b>Time</b>: ", time,
+        "<br><b>Temperature (C)</b> ", temperature,
+        "<br><b>RH (%):</b> ", relative_humidity,
+        "<br><b>PM10: </b> ", pm_10,
+        "<br><b>PM2.5: </b> ", pm_2_5
+        ),
+      radius = 1,
+      color = ~pal(pm_10),
+      data = df
+    )
+  
+
+```
+
+Sidebar {.sidebar}
+======================================================================
+
+### Choose your parameters
+<br>
+
+```{r}
+# Define inputs
+
+textInput(inputId = "device", label = "Your device ID")
+
+actionButton("goButton", "Get data")
+
+dateRangeInput(inputId = "dates", 
+               label = "Date range")
+
+
+sliderInput(inputId = "hours", 
+              label = "Hour range",
+              dragRange = TRUE,
+              value = c(7,9), min = 0, max = 24)
+
+checkboxGroupInput('params', 
+                   label = 'Select the parameter to plot', 
+                   c( "PM2.5" = "pm25",
+                       "PM10" = "pm10")
+                   )
+
+```
+
+***
+Some dummy text in the sidebar
+
+Data by LogAir, all CC-BY 4.0
+
+Overview
+======================================================================
+
+Row 
+-----------------------------------------------------------------------
+
+### Map
+
+```{r}
+
+renderLeaflet({
+  map
+  })
+
+  
+```
+
+### PM concentration for a selected area (click on map)
+```{r}
+"Some chart"
+```
+
+Row
+-----------------------------------------------------------------------
+
+### All particulate matter values for this device
+
+```{r}
+
+
+renderPlot({ base_graph +
+  geom_col(aes(y = pm_10, colour = "PM 10")) +
+  geom_col(aes(y = pm_2_5, colour = "PM 2.5")) 
+  })
+
+# if pm25 true, base_graph+pm25, if if pm10 true, base_graph+pm10, else base_graph
+
+
+```
+
+Calendar
+============================================================================
+
+```{r}
+# Recreate calendar heatmap
+library(lubridate) # For date and time manipulation
+
+dfsarasa  <-  tibble(
+  dateCol = seq(
+    dmy("01/01/2019"),
+    dmy("31/12/2019"),
+    "days"
+  ),
+  ValueCol = runif(365)
+)
+
+dfPlot <- dfsarasa %>% 
+  mutate(weekday = wday(dateCol, label = T, week_start = 1), # can put week_start = 1 to start week on Monday
+         month = month(dateCol, label = T),
+         date = yday(dateCol),
+         week = epiweek(dateCol))
+
+# isoweek makes the last week of the year as week 1, so need to change that to week 53 for the plot
+dfPlot$week[dfPlot$month=="Dec" & dfPlot$week ==1] = 53 
+
+dfPlot <- dfPlot %>% 
+  group_by(month) %>% 
+  mutate(monthweek = 1 + week - min(week))
+
+# Plot
+# 
+# dfPlot %>%
+#   ggplot(aes(weekday,-week, fill = ValueCol)) +
+#   geom_tile(colour = "white")  + 
+#   geom_text(aes(label = day(dateCol)), size = 2.5, color = "black") +
+#   theme(aspect.ratio = 1/8,
+#         legend.position = "top",
+#         legend.key.width = unit(3, "cm"),
+#         axis.title.x = element_blank(),
+#         axis.title.y = element_blank(),
+#         axis.text.y = element_blank(),
+#         panel.grid = element_blank(),
+#         axis.ticks = element_blank(),
+#         panel.background = element_blank(),
+#         legend.title.align = 0.5,
+#         strip.background = element_blank(),
+#         strip.text = element_text(face = "bold", size = 15),
+#         panel.border = element_rect(colour = "grey", fill=NA, size=1),
+#         plot.title = element_text(hjust = 0.5, size = 21, face = "bold",
+#                                   margin = margin(0,0,0.5,0, unit = "cm"))) +
+#   scale_fill_gradientn(colours = c("#6b9235", "white", "red"),
+#                        values = scales::rescale(c(-1, -0.05, 0, 0.05, 1)), 
+#                        name = "Values",
+#                        guide = guide_colorbar(title.position = "top", 
+#                                               direction = "horizontal")) +
+#   facet_wrap(~month, nrow = 4, ncol = 3, scales = "free") +
+#   labs(title = "Calendar heatmap 2019")
+
+
+dfPlot %>%
+  ggplot(aes(weekday,-week, fill = ValueCol)) +
+  geom_tile(colour = "white")  + 
+  geom_text(aes(label = day(dateCol)), size = 3) +
+  theme(aspect.ratio = 1/2,
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        panel.background = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 15),
+        panel.border = element_rect(colour = "black", fill=NA, size=1)) +
+  scale_fill_gradient2(midpoint = 0.5) +
+  facet_wrap(~month, nrow = 4, ncol = 3, scales = "free") +
+  labs(title = "Calendar heatmap 2019")
+
+```
+
+Raw data
+============================================================================
+```{r}
+datatable(df[c("transaction_id", "date", "time", "device_id", "latitude", "longitude", "altitude", "temperature", "relative_humidity", "pm_2_5", "pm_10")],
+          filter = 'top',
+          rownames = FALSE)
+```
+
+About
+============================================================================
+
+Other about dummy text
+
+
+<style>
+
+#sidebar.section.sidebar {
+
+  background-color: white; 
+  font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+
+}
+
+.js-irs-0 .irs-bar {
+border-top-color: #d01010;
+border-bottom-color: #d01010;
+} 
+
+.js-irs-0 .irs-bar-edge {
+border-color: #d01010;
+}
+
+.js-irs-0 .irs-single, .js-irs-0 .irs-bar-edge, .js-irs-0 .irs-bar {
+background: #a00;
+}
+
+</style>
